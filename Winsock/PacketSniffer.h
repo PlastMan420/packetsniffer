@@ -8,11 +8,7 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <stdio.h>
-#include <malloc.h>
-#include <memory>
 #include <iostream>
-#include <chrono>
-#include <thread>
 #include "ipv4_struct.h"
 
 #pragma comment(lib, "Ws2_32.lib")
@@ -27,23 +23,14 @@ class PacketSniffer {
     SOCKET sniffer;
 
     private:
-        bool StartWinSock();
+    bool StartWinSock();
+    void displayLastError();
+    void PrintTcpPacket(char* Buffer, int Size);
+    void ProcessPacket(char* Buffer, int Size, wchar_t ipStringBuffer[INET_ADDRSTRLEN]);
+    void PrintIcmpPacket(char* Buffer, int Size);
 
-        //void PrintTcpPacket(char* Buffer, int Size);
+    INT bindSocket(SOCKET* snifferm);
 
-        //void PrintIpHeader(char* Buffer);
-
-        //void ProcessPacket(char* Buffer, int Size);
-        
-        void displayLastError();
-
-        INT bindSocket(SOCKET* snifferm, BOOL* bNewBehavior);
-
-        const int packetSize = 65536;
-
-
-        // local is a HOSTENT pointer that contains the list of local ip addresses.
-
-        int tcp = 0, udp = 0, icmp = 0, others = 0, igmp = 0, total = 0;
+    const int packetSize = 65536;
 };
     

@@ -11,15 +11,28 @@ bool PacketSniffer::Init() {
     DWORD dwRetval;
     PCWSTR pNodeName;
 
+    sockaddr_in Source;
+
     // Init Winsock.
     bool initwinsockres = StartWinSock();
     if (!initwinsockres) {
         return false;
     }
 
+    /*
+     * If you use it (IPPROTO_IP), and if the socket type is SOCK_STREAM and the family is AF_INET,
+     * then the protocol will automatically be TCP (exactly the same as if you'd used IPPROTO_TCP).
+     * Buf if you use IPPROTO_IP together with AF_INET and SOCK_RAW, you will have an error,
+     * because the kernel (linux in their case) cannot choose a protocol automatically in this case.
+     * sauce: https://stackoverflow.com/questions/24590818/what-is-the-difference-between-ipproto-ip-and-ipproto-raw
+     *
+     * tl;dr: IPPROTO_IP + AF_INET + SOCK_STREAP = TCP
+     */
+
     // 1 Create a raw socket
     std::cout << "Creating socket" << std::endl;
     sniffer = socket(AF_INET, SOCK_RAW, IPPROTO_IP);
+
     if(sniffer == INVALID_SOCKET)
     {
         std::cout << "Error: Socket init failed" << std::endl;
@@ -27,19 +40,19 @@ bool PacketSniffer::Init() {
         return false;
     }
 
-    //Retrive the available IPs of the local host
-
-    ZeroMemory(&hints, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
     // 2. Bind the socket to the local IP over which the traffic is to be sniffed.
-    if (bindSocket(&sniffer, &bNewBehavior) < 0) {
+    if (bindSocket(&sniffer) < 0) {
         return false;
     }
 
-    // 3. Call WSAIoctl() on the socket with SIO_RCVALL option to give it sniffing powers.
+    // 3. set socket options
+    // specify the protocol type for the socket
+    if (setsockopt(sniffer, IPPROTO_IP, IP_HDRINCL, (char*)&bNewBehavior, sizeof(bNewBehavior)) == -1) {
+        printf("Error in setsockopt(): %d\n", WSAGetLastError());
+        return -1;
+    }
+
+    // 4. Call WSAIoctl() on the socket with SIO_RCVALL option to give it sniffing powers.
     // Sets socket mode.
     int WSAIoctl_result = WSAIoctl(
         sniffer,
@@ -56,7 +69,7 @@ bool PacketSniffer::Init() {
     if (WSAIoctl_result == SOCKET_ERROR)
     {
         std::cout <<  "WSAIoctl() failed." << std::endl;
-        std::cout <<  "Error : %d.\n" << std::endl;
+        printf("Error: %d\n", WSAGetLastError());
         return false;
     }
      
@@ -64,17 +77,7 @@ bool PacketSniffer::Init() {
 
     // To get the local IP’s associated with the machine all that needs to be done is:
     gethostname(hostname, sizeof(hostname)); //its a char hostname[100] for local hostname
-
     std::cout << "Host name: " << hostname << std::endl;
-
-    PCWSTR pServiceName = L"1042";
-    dwRetval = GetAddrInfoW(L"Droog-Machine", pServiceName, &hints, &result);
-    if (dwRetval != 0)
-    {
-        displayLastError();
-        FreeAddrInfoW(result);
-        return false;
-    }
 
     while (result != NULL) {
         SOCKADDR* curAddr = result->ai_addr;
@@ -89,16 +92,8 @@ bool PacketSniffer::Init() {
     Sniff(&sniffer);
 }
 
-void PacketSniffer::displayLastError() {
-    std::cout << "Error : %d." << WSAGetLastError() << std::endl;
-}
-
 void PacketSniffer::Sniff(SOCKET* sniffer) {
-    //char* Buffer = (char*)malloc(packetSize);
     std::unique_ptr<char, void (*)(void*)> buffer((char*)malloc(packetSize), free);
-
-    int result = 0;
-    std::chrono::milliseconds interval(400);
 
     if (buffer.get() == NULL)
     {
@@ -108,43 +103,60 @@ void PacketSniffer::Sniff(SOCKET* sniffer) {
 
     // 4. Put the socket in an infinite loop of recvfrom.
     int i = 0;
-        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-        while(1){
-        // ... Place the logic you want to execute here ...
+
+    while(1){
         // 5. recvfrom gets the packet in the string buffer.
-        result = recvfrom(*sniffer, buffer.get(), packetSize, 0, 0, 0); //ring-a-ring-a roses
-        if (result > 0)
+        int receivedPacketSize = recvfrom(*sniffer, buffer.get(), packetSize, 0, 0, 0);
+        if (receivedPacketSize > 0)
         {
-            //ProcessPacket(buffer.get(), result);
                 wchar_t ipStringBuffer[INET_ADDRSTRLEN];
                 InetNtopW(AF_INET, buffer.get()+i, ipStringBuffer, INET_ADDRSTRLEN);
-                //printf("%d \n", ipStringBuffer);
-                std::wcout << ipStringBuffer << std::endl;
-            
+                IPV4_HDR* iphdr = (IPV4_HDR*)buffer.get();
+                ProcessPacket(buffer.get(), receivedPacketSize, ipStringBuffer);
         }
         else
         {
             std::cout << "recvfrom() failed." << std::endl;
             displayLastError();
         }
-
-        // Get the end time
-        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-
-        // Calculate the time taken for the loop iteration
-        std::chrono::duration<double> elapsed = end - start;
-
-        // Wait for the rest of the interval, if needed
-        if (elapsed < interval) {
-            std::this_thread::sleep_for(interval - elapsed);
-        }
-
         i++;
     }
 
-    //free(Buffer);
-
     return;
+}
+
+void PacketSniffer::ProcessPacket(char* Buffer, int Size, wchar_t ipStringBuffer[INET_ADDRSTRLEN])
+{
+    IPV4_HDR* iphdr = (IPV4_HDR*)Buffer;
+    
+    printf("\n");
+    std::wcout << L"Source: " << ipStringBuffer;
+
+    switch (iphdr->ip_protocol) //Check the Protocol and do accordingly...
+    {
+    case 1: //ICMP Protocol
+        std::wcout << ": " << "ICMP" << std::endl;
+        PrintIcmpPacket(Buffer, Size);
+        break;
+
+    case 2: //IGMP Protocol
+        std::wcout << ": " << "IGMP" << std::endl;
+        break;
+
+    case 6: //TCP Protocol
+        std::wcout << ": " << "TCP" << std::endl;
+        PrintTcpPacket(Buffer, Size);
+        break;
+
+    case 17: //UDP Protocol
+        std::wcout << ": " << "UDP" << std::endl;
+        //PrintUdpPacket(Buffer, Size);
+        break;
+
+    default: //Some Other Protocol like ARP etc.
+        //++others;
+        break;
+    }
 }
 
 PacketSniffer::~PacketSniffer()
@@ -165,13 +177,16 @@ bool PacketSniffer::StartWinSock() {
     return true;
 }
 
-INT PacketSniffer::bindSocket(SOCKET* sniffer, BOOL* bNewBehavior)
+INT PacketSniffer::bindSocket(SOCKET* sniffer)
 {
     PCWSTR localAddr = L"127.0.0.1\0";
 
     sockaddr_in dest;
     ZeroMemory(&dest, sizeof(dest));
+
     dest.sin_family = AF_INET;
+    dest.sin_port = 0;
+
     InetPtonW(AF_INET, localAddr, &dest.sin_addr.s_addr);
     //dest.sin_port = htons(0);
 
@@ -191,11 +206,54 @@ INT PacketSniffer::bindSocket(SOCKET* sniffer, BOOL* bNewBehavior)
     else {
         printf("\nBinding successful\n");
     }
-
-    if (setsockopt(*sniffer, IPPROTO_IP, IP_HDRINCL, (char*)&*bNewBehavior, sizeof(*bNewBehavior)) == -1) {
-        printf("Error in setsockopt(): %d\n", WSAGetLastError());
-        return -1;
-    }
     
     return iResult;
+}
+
+void PacketSniffer::displayLastError() {
+    std::cout << "Error : %d." << WSAGetLastError() << std::endl;
+}
+
+void PacketSniffer::PrintTcpPacket(char* Buffer, int Size)
+{
+    USHORT iphdrlen;
+    IPV4_HDR* iphdr;
+
+    iphdr = (IPV4_HDR*)Buffer;
+    iphdrlen = iphdr->ip_header_len * 4;
+
+    TCP_HDR* tcpheader = (TCP_HDR*)(Buffer + iphdrlen);
+
+    printf("TCP Header\n");
+    printf(" |-Source Port : %u\n", ntohs(tcpheader->source_port));
+    printf(" |-Destination Port : %u\n", ntohs(tcpheader->dest_port));
+    printf(" |-CWR Flag : %d\n", (UINT)tcpheader->cwr);
+    printf(" |-Checksum : %d\n", ntohs(tcpheader->checksum));
+}
+
+void PacketSniffer::PrintIcmpPacket(char* Buffer, int Size)
+{
+    USHORT iphdrlen;
+
+    IPV4_HDR*  iphdr = (IPV4_HDR*)Buffer;
+    iphdrlen = iphdr->ip_header_len * 4;
+
+    ICMP_HDR*  icmpheader = (ICMP_HDR*)(Buffer + iphdrlen);
+
+    printf("ICMP Header\n");
+
+    if ((UINT)(icmpheader->type) == 11)
+    {
+        printf(" (TTL Expired)\n");
+    }
+    else if ((UINT)(icmpheader->type) == 0)
+    {
+        printf(" (ICMP Echo Reply)\n");
+    }
+
+    printf(" |-Code : %d\n", (UINT)(icmpheader->code));
+    printf(" |-Checksum : %d\n", ntohs(icmpheader->checksum));
+    printf(" |-ID : %d\n", ntohs(icmpheader->id));
+    printf(" |-Sequence : %d\n", ntohs(icmpheader->seq));
+    printf("\n");
 }
