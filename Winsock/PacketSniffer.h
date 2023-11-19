@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <iostream>
 #include "ipv4_struct.h"
+#include <vector> 
+#include <fmt/core.h>
+#include <fmt/xchar.h> // for wchar_t
 
 #pragma comment(lib, "Ws2_32.lib")
 #define SIO_RCVALL _WSAIOW(IOC_VENDOR,1)
@@ -26,8 +29,9 @@ class PacketSniffer {
     bool StartWinSock();
     void displayLastError();
     void PrintTcpPacket(char* Buffer, int Size);
-    void ProcessPacket(char* Buffer, int Size, wchar_t ipStringBuffer[INET_ADDRSTRLEN]);
+    void ProcessPacket(char* Buffer, int Size, std::wstring ipStringBufferW);
     void PrintIcmpPacket(char* Buffer, int Size);
+    void PrintUdpPacket(char* Buffer, int Size);
 
     INT bindSocket(SOCKET* snifferm);
 

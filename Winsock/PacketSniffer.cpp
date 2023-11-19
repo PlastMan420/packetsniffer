@@ -30,12 +30,12 @@ bool PacketSniffer::Init() {
      */
 
     // 1 Create a raw socket
-    std::cout << "Creating socket" << std::endl;
+    fmt::print("Creating socket\n");
     sniffer = socket(AF_INET, SOCK_RAW, IPPROTO_IP);
 
     if(sniffer == INVALID_SOCKET)
     {
-        std::cout << "Error: Socket init failed" << std::endl;
+        fmt::print("Error: Socket init failed\n");
         displayLastError();
         return false;
     }
@@ -48,7 +48,8 @@ bool PacketSniffer::Init() {
     // 3. set socket options
     // specify the protocol type for the socket
     if (setsockopt(sniffer, IPPROTO_IP, IP_HDRINCL, (char*)&bNewBehavior, sizeof(bNewBehavior)) == -1) {
-        printf("Error in setsockopt(): %d\n", WSAGetLastError());
+        fmt::print("Error in setsockopt()\n");
+        displayLastError();
         return -1;
     }
 
@@ -68,38 +69,22 @@ bool PacketSniffer::Init() {
 
     if (WSAIoctl_result == SOCKET_ERROR)
     {
-        std::cout <<  "WSAIoctl() failed." << std::endl;
-        printf("Error: %d\n", WSAGetLastError());
+        fmt::print( "WSAIoctl() failed.\n");
+        displayLastError();
         return false;
     }
      
-    std::cout << "Socket set." << std::endl;
+    fmt::print("Socket set\n");
 
     // To get the local IP’s associated with the machine all that needs to be done is:
     gethostname(hostname, sizeof(hostname)); //its a char hostname[100] for local hostname
-    std::cout << "Host name: " << hostname << std::endl;
-
-    while (result != NULL) {
-        SOCKADDR* curAddr = result->ai_addr;
-        curAddr = result->ai_addr;
-
-        wchar_t ipStringBuffer[INET_ADDRSTRLEN];
-        std::wcout << InetNtopW(AF_INET, &curAddr->sa_data, ipStringBuffer, INET_ADDRSTRLEN) << std::endl;
-
-        result = result->ai_next;
-    }
+    fmt::print("Host name: {0}\n", hostname);
 
     Sniff(&sniffer);
 }
 
 void PacketSniffer::Sniff(SOCKET* sniffer) {
-    std::unique_ptr<char, void (*)(void*)> buffer((char*)malloc(packetSize), free);
-
-    if (buffer.get() == NULL)
-    {
-        std::cout << "malloc() failed." << std::endl;
-        return;
-    }
+    std::unique_ptr<char[]> buffer(new char[packetSize]);
 
     // 4. Put the socket in an infinite loop of recvfrom.
     int i = 0;
@@ -109,14 +94,16 @@ void PacketSniffer::Sniff(SOCKET* sniffer) {
         int receivedPacketSize = recvfrom(*sniffer, buffer.get(), packetSize, 0, 0, 0);
         if (receivedPacketSize > 0)
         {
+                //std::wstring ipStringBuffer;
                 wchar_t ipStringBuffer[INET_ADDRSTRLEN];
                 InetNtopW(AF_INET, buffer.get()+i, ipStringBuffer, INET_ADDRSTRLEN);
                 IPV4_HDR* iphdr = (IPV4_HDR*)buffer.get();
-                ProcessPacket(buffer.get(), receivedPacketSize, ipStringBuffer);
+
+                ProcessPacket(buffer.get(), receivedPacketSize, ipStringBuffer);               
         }
         else
         {
-            std::cout << "recvfrom() failed." << std::endl;
+            fmt::print("recvfrom() failed.");
             displayLastError();
         }
         i++;
@@ -125,36 +112,35 @@ void PacketSniffer::Sniff(SOCKET* sniffer) {
     return;
 }
 
-void PacketSniffer::ProcessPacket(char* Buffer, int Size, wchar_t ipStringBuffer[INET_ADDRSTRLEN])
+void PacketSniffer::ProcessPacket(char* Buffer, int Size, std::wstring ipStringBufferW)
 {
     IPV4_HDR* iphdr = (IPV4_HDR*)Buffer;
     
-    printf("\n");
-    std::wcout << L"Source: " << ipStringBuffer;
+    fmt::print(L"\nSource: {0} : ", ipStringBufferW);
 
     switch (iphdr->ip_protocol) //Check the Protocol and do accordingly...
     {
     case 1: //ICMP Protocol
-        std::wcout << ": " << "ICMP" << std::endl;
+        fmt::print(L"ICMP");
         PrintIcmpPacket(Buffer, Size);
         break;
 
     case 2: //IGMP Protocol
-        std::wcout << ": " << "IGMP" << std::endl;
+        fmt::print(L"IGMP");
         break;
 
     case 6: //TCP Protocol
-        std::wcout << ": " << "TCP" << std::endl;
+        fmt::print(L"TCP");
         PrintTcpPacket(Buffer, Size);
         break;
 
     case 17: //UDP Protocol
-        std::wcout << ": " << "UDP" << std::endl;
-        //PrintUdpPacket(Buffer, Size);
+        fmt::print(L"UDP");
+        PrintUdpPacket(Buffer, Size);
         break;
 
     default: //Some Other Protocol like ARP etc.
-        //++others;
+        fmt::print(L"Other");
         break;
     }
 }
@@ -173,13 +159,13 @@ bool PacketSniffer::StartWinSock() {
         return false;
     }
 
-    std::cout << "WSAStartup DONE." << std::endl;
+    fmt::print(L"WSAStartup DONE.\n");
     return true;
 }
 
 INT PacketSniffer::bindSocket(SOCKET* sniffer)
 {
-    PCWSTR localAddr = L"127.0.0.1\0";
+    std::wstring localAddr = L"127.0.0.1\0";
 
     sockaddr_in dest;
     ZeroMemory(&dest, sizeof(dest));
@@ -187,10 +173,9 @@ INT PacketSniffer::bindSocket(SOCKET* sniffer)
     dest.sin_family = AF_INET;
     dest.sin_port = 0;
 
-    InetPtonW(AF_INET, localAddr, &dest.sin_addr.s_addr);
-    //dest.sin_port = htons(0);
+    InetPtonW(AF_INET, localAddr.data(), &dest.sin_addr.s_addr);
 
-    printf("\nBinding socket to local system and port 0 ... \n");
+    fmt::print(L"\nBinding socket to local system and port 0 ... \n");
     sockaddr* addr = reinterpret_cast<sockaddr*>(&dest);
 
     INT iResult = bind(*sniffer, addr, sizeof(dest));
@@ -198,20 +183,20 @@ INT PacketSniffer::bindSocket(SOCKET* sniffer)
     if (iResult == SOCKET_ERROR)
     {
         //The inet_ntoa function converts an (Ipv4) Internet network address into an ASCII string in Internet standard dotted-decimal format.
-       // printf("bind(%s) failed.\n", InetNtopW(AF_INET, addr));
-        wchar_t ipStringBuffer[INET_ADDRSTRLEN];
-        std::wcout << L"bind failed: " << InetNtopW(AF_INET, &dest.sin_addr, ipStringBuffer, INET_ADDRSTRLEN) << std::endl;
+        std::wstring ipStringBuffer;
+
+        fmt::print(L"\nbind failed: {0} \n", InetNtopW(AF_INET, &dest.sin_addr, ipStringBuffer.data(), INET_ADDRSTRLEN));
         displayLastError();
     }
     else {
-        printf("\nBinding successful\n");
+        fmt::print(L"\nBinding successful\n");
     }
     
     return iResult;
 }
 
 void PacketSniffer::displayLastError() {
-    std::cout << "Error : %d." << WSAGetLastError() << std::endl;
+    fmt::print(L"\nError : {0} \n", WSAGetLastError());
 }
 
 void PacketSniffer::PrintTcpPacket(char* Buffer, int Size)
@@ -224,11 +209,12 @@ void PacketSniffer::PrintTcpPacket(char* Buffer, int Size)
 
     TCP_HDR* tcpheader = (TCP_HDR*)(Buffer + iphdrlen);
 
-    printf("TCP Header\n");
-    printf(" |-Source Port : %u\n", ntohs(tcpheader->source_port));
-    printf(" |-Destination Port : %u\n", ntohs(tcpheader->dest_port));
-    printf(" |-CWR Flag : %d\n", (UINT)tcpheader->cwr);
-    printf(" |-Checksum : %d\n", ntohs(tcpheader->checksum));
+    fmt::print("TCP Header\n");
+    fmt::print(L" |-Source Port : {0}\n", ntohs(tcpheader->source_port));
+    fmt::print(L" |-Destination Port : {0}\n", ntohs(tcpheader->dest_port));
+    fmt::print(L" |-CWR Flag : {0}\n", (UINT)tcpheader->cwr);
+    fmt::print(L" |-Checksum : {0}\n", ntohs(tcpheader->checksum));
+    fmt::print("\n");
 }
 
 void PacketSniffer::PrintIcmpPacket(char* Buffer, int Size)
@@ -240,20 +226,37 @@ void PacketSniffer::PrintIcmpPacket(char* Buffer, int Size)
 
     ICMP_HDR*  icmpheader = (ICMP_HDR*)(Buffer + iphdrlen);
 
-    printf("ICMP Header\n");
+    fmt::print("ICMP Header\n");
 
     if ((UINT)(icmpheader->type) == 11)
     {
-        printf(" (TTL Expired)\n");
+        fmt::print(" (TTL Expired)\n");
     }
     else if ((UINT)(icmpheader->type) == 0)
     {
-        printf(" (ICMP Echo Reply)\n");
+        fmt::print(" (ICMP Echo Reply)\n");
     }
 
-    printf(" |-Code : %d\n", (UINT)(icmpheader->code));
-    printf(" |-Checksum : %d\n", ntohs(icmpheader->checksum));
-    printf(" |-ID : %d\n", ntohs(icmpheader->id));
-    printf(" |-Sequence : %d\n", ntohs(icmpheader->seq));
-    printf("\n");
+    fmt::print(" |-Code : {0}\n", (UINT)(icmpheader->code));
+    fmt::print(" |-Checksum : {0}\n", ntohs(icmpheader->checksum));
+    fmt::print(" |-ID : {0}\n", ntohs(icmpheader->id));
+    fmt::print(" |-Sequence : {0}\n", ntohs(icmpheader->seq));
+    fmt::print("\n");
+}
+
+void PacketSniffer::PrintUdpPacket(char* Buffer, int Size)
+{
+    USHORT iphdrlen;
+
+    IPV4_HDR* iphdr = (IPV4_HDR*)Buffer;
+    iphdrlen = iphdr->ip_header_len * 4;
+
+    UDP_HDR* udpheader = (UDP_HDR*)(Buffer + iphdrlen);
+
+    fmt::print("\nUDP Header\n");
+    fmt::print(" |-Source Port : {0}\n", ntohs(udpheader->source_port));
+    fmt::print(" |-Destination Port : {0}\n", ntohs(udpheader->dest_port));
+    fmt::print(" |-UDP Length : {0}\n", ntohs(udpheader->udp_length));
+    fmt::print(" |-UDP Checksum : {0}\n", ntohs(udpheader->udp_checksum));
+    fmt::print("\n");
 }
