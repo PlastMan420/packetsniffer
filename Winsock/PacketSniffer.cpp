@@ -1,17 +1,10 @@
 #include "PacketSniffer.h"
 
 bool PacketSniffer::Init() {
-    char hostname[256];
-    INT iResult;
-    ADDRINFOW* result = NULL;
-    ADDRINFOW hints;
+    std::string hostname(new char[256]);
     BOOL bNewBehavior = TRUE;
     DWORD dwBytesReturnedBuffer = 0;
     LPDWORD dwBytesReturned = &dwBytesReturnedBuffer;
-    DWORD dwRetval;
-    PCWSTR pNodeName;
-
-    sockaddr_in Source;
 
     // Init Winsock.
     bool initwinsockres = StartWinSock();
@@ -27,6 +20,10 @@ bool PacketSniffer::Init() {
      * sauce: https://stackoverflow.com/questions/24590818/what-is-the-difference-between-ipproto-ip-and-ipproto-raw
      *
      * tl;dr: IPPROTO_IP + AF_INET + SOCK_STREAP = TCP
+     */
+
+    /*
+     * AF_INET = IPv4, AF_INET6 for IPv6
      */
 
     // 1 Create a raw socket
@@ -77,29 +74,28 @@ bool PacketSniffer::Init() {
     fmt::print("Socket set\n");
 
     // To get the local IP’s associated with the machine all that needs to be done is:
-    gethostname(hostname, sizeof(hostname)); //its a char hostname[100] for local hostname
-    fmt::print("Host name: {0}\n", hostname);
+    gethostname(hostname.data(), sizeof(hostname)); //its a char hostname[100] for local hostname
+    fmt::print("Host name: {0}\n", hostname.data());
 
     Sniff(&sniffer);
 }
 
 void PacketSniffer::Sniff(SOCKET* sniffer) {
-    std::unique_ptr<char[]> buffer(new char[packetSize]);
+    std::string buffer(new char[packetSize]);
 
     // 4. Put the socket in an infinite loop of recvfrom.
     int i = 0;
 
     while(1){
         // 5. recvfrom gets the packet in the string buffer.
-        int receivedPacketSize = recvfrom(*sniffer, buffer.get(), packetSize, 0, 0, 0);
+        int receivedPacketSize = recvfrom(*sniffer, buffer.data(), packetSize, 0, 0, 0);
         if (receivedPacketSize > 0)
         {
-                //std::wstring ipStringBuffer;
-                wchar_t ipStringBuffer[INET_ADDRSTRLEN];
-                InetNtopW(AF_INET, buffer.get()+i, ipStringBuffer, INET_ADDRSTRLEN);
-                IPV4_HDR* iphdr = (IPV4_HDR*)buffer.get();
+                std::wstring ipStringBuffer(new wchar_t[INET_ADDRSTRLEN]);
+                InetNtopW(AF_INET, buffer.data()+i, ipStringBuffer.data(), INET_ADDRSTRLEN);
+                IPV4_HDR* iphdr = (IPV4_HDR*)buffer.data();
 
-                ProcessPacket(buffer.get(), receivedPacketSize, ipStringBuffer);               
+                ProcessPacket(buffer.data(), receivedPacketSize, ipStringBuffer);
         }
         else
         {
@@ -165,21 +161,22 @@ bool PacketSniffer::StartWinSock() {
 
 INT PacketSniffer::bindSocket(SOCKET* sniffer)
 {
-    std::wstring localAddr = L"127.0.0.1\0";
-
+    std::wstring localAddr = L"127.0.0.1";
     sockaddr_in dest;
-    ZeroMemory(&dest, sizeof(dest));
 
+    ZeroMemory(&dest, sizeof(dest));
     dest.sin_family = AF_INET;
-    dest.sin_port = 0;
+
+    // Port 0 can be used by applications when calling the bind() command 
+    //  to request the next available dynamically allocated source port number.
+    dest.sin_port = PacketSniffer::portNumber; // = 0
 
     InetPtonW(AF_INET, localAddr.data(), &dest.sin_addr.s_addr);
 
-    fmt::print(L"\nBinding socket to local system and port 0 ... \n");
+    fmt::print(L"Binding socket to local system and port 0 ... \n");
+
     sockaddr* addr = reinterpret_cast<sockaddr*>(&dest);
-
     INT iResult = bind(*sniffer, addr, sizeof(dest));
-
     if (iResult == SOCKET_ERROR)
     {
         //The inet_ntoa function converts an (Ipv4) Internet network address into an ASCII string in Internet standard dotted-decimal format.
@@ -189,7 +186,7 @@ INT PacketSniffer::bindSocket(SOCKET* sniffer)
         displayLastError();
     }
     else {
-        fmt::print(L"\nBinding successful\n");
+        fmt::print(L"Binding successful\n");
     }
     
     return iResult;
@@ -203,13 +200,12 @@ void PacketSniffer::PrintTcpPacket(char* Buffer, int Size)
 {
     USHORT iphdrlen;
     IPV4_HDR* iphdr;
-
-    iphdr = (IPV4_HDR*)Buffer;
+    iphdr = reinterpret_cast<IPV4_HDR*>(Buffer);
     iphdrlen = iphdr->ip_header_len * 4;
 
     TCP_HDR* tcpheader = (TCP_HDR*)(Buffer + iphdrlen);
 
-    fmt::print("TCP Header\n");
+    fmt::print("\nTCP Header\n");
     fmt::print(L" |-Source Port : {0}\n", ntohs(tcpheader->source_port));
     fmt::print(L" |-Destination Port : {0}\n", ntohs(tcpheader->dest_port));
     fmt::print(L" |-CWR Flag : {0}\n", (UINT)tcpheader->cwr);
@@ -220,13 +216,13 @@ void PacketSniffer::PrintTcpPacket(char* Buffer, int Size)
 void PacketSniffer::PrintIcmpPacket(char* Buffer, int Size)
 {
     USHORT iphdrlen;
-
-    IPV4_HDR*  iphdr = (IPV4_HDR*)Buffer;
+    IPV4_HDR* iphdr;
+    iphdr = reinterpret_cast<IPV4_HDR*>(Buffer);
     iphdrlen = iphdr->ip_header_len * 4;
 
     ICMP_HDR*  icmpheader = (ICMP_HDR*)(Buffer + iphdrlen);
 
-    fmt::print("ICMP Header\n");
+    fmt::print("\nICMP Header\n");
 
     if ((UINT)(icmpheader->type) == 11)
     {
@@ -247,8 +243,8 @@ void PacketSniffer::PrintIcmpPacket(char* Buffer, int Size)
 void PacketSniffer::PrintUdpPacket(char* Buffer, int Size)
 {
     USHORT iphdrlen;
-
-    IPV4_HDR* iphdr = (IPV4_HDR*)Buffer;
+    IPV4_HDR* iphdr;
+    iphdr = reinterpret_cast<IPV4_HDR*>(Buffer);
     iphdrlen = iphdr->ip_header_len * 4;
 
     UDP_HDR* udpheader = (UDP_HDR*)(Buffer + iphdrlen);
