@@ -9,8 +9,17 @@
 */
 
 #include "PacketSniffer.h"
+#include <shlobj_core.h>
 
 int main() {
+    BOOL adminMode = IsUserAnAdmin();
+
+    if (adminMode == FALSE) {
+        fmt::print("Please re-run with admin privileges");
+        system("pause");
+        return -1;
+    }
+
     PacketSniffer sniffer;    
 
     bool initRes = sniffer.Init();
